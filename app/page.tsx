@@ -1,4 +1,4 @@
-'use client';
+"use client";
 
 import React, { useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
@@ -16,6 +16,8 @@ type Company = {
   companyName: string;
   email: string;
   plan: string;
+  code?: string;
+  uploadedAt?: string;
   offers: Offer[];
 };
 
@@ -29,6 +31,20 @@ type User = {
 };
 
 type RawRow = Record<string, unknown>;
+
+type UploadDraft = {
+  rows: RawRow[];
+  headers: string[];
+  fileName: string;
+  mapping: {
+    name: string;
+    price: string;
+    discount: string;
+  };
+};
+
+const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+const MATCH_THRESHOLD = 0.8;
 
 const normalizeName = (value: string) =>
   String(value || "")
@@ -83,17 +99,17 @@ const similarityScore = (a: string, b: string) => {
 
   if (!x || !y) return 0;
   if (x === y) return 1;
+
   if (x.includes(y) || y.includes(x)) {
     return Math.min(x.length, y.length) / Math.max(x.length, y.length);
   }
 
   const distance = levenshtein(x, y);
   const maxLen = Math.max(x.length, y.length);
-
   return maxLen === 0 ? 1 : 1 - distance / maxLen;
 };
 
-const bestMatch = (target: string, candidates: string[], threshold = 0.8) => {
+const bestMatch = (target: string, candidates: string[], threshold = MATCH_THRESHOLD) => {
   let bestKey: string | null = null;
   let best = 0;
 
@@ -109,16 +125,13 @@ const bestMatch = (target: string, candidates: string[], threshold = 0.8) => {
   return { key: bestKey, score: best };
 };
 
-const guessColumn = (
-  headers: string[],
-  kind: "name" | "price" | "discount"
-) => {
+const guessColumn = (headers: string[], kind: "name" | "price" | "discount") => {
   const normalized = headers.map((h) => ({ raw: h, key: normalizeName(h) }));
 
   const patterns = {
-    name: ["name", "product name", "اسم الصنف", "الصنف", "اسم المنتج"],
-    price: ["price", "السعر", "سعر", "unit price", "buy price"],
-    discount: ["discount", "الخصم", "discount %", "خصم", "نسبه الخصم"],
+    name: ["name", "product name", "اسم الصنف", "الصنف", "اسم المنتج", "item", "description"],
+    price: ["price", "السعر", "سعر", "unit price", "buy price", "cost"],
+    discount: ["discount", "الخصم", "discount %", "خصم", "نسبه الخصم", "disc"],
   }[kind];
 
   for (const pattern of patterns) {
@@ -195,95 +208,54 @@ const downloadCsv = (rows: Record<string, unknown>[], fileName: string) => {
   URL.revokeObjectURL(url);
 };
 
-const seedCompanies: Company[] = [
+const seedCompaniesBase = [
   {
-    id: crypto.randomUUID(),
     companyName: "Alpha Pharma",
     email: "alpha@qarenly.com",
     plan: "Pro",
     offers: [
-      {
-        productName: "Panadol Extra",
-        normalizedName: normalizeName("Panadol Extra"),
-        price: 100,
-        discount: 20,
-        finalPrice: 80,
-      },
-      {
-        productName: "Augmentin 1g",
-        normalizedName: normalizeName("Augmentin 1g"),
-        price: 180,
-        discount: 12,
-        finalPrice: 158.4,
-      },
-      {
-        productName: "Cetal 500",
-        normalizedName: normalizeName("Cetal 500"),
-        price: 30,
-        discount: 5,
-        finalPrice: 28.5,
-      },
+      { productName: "Panadol Extra", price: 100, discount: 20 },
+      { productName: "Augmentin 1g", price: 180, discount: 12 },
+      { productName: "Cetal 500", price: 30, discount: 5 },
     ],
   },
   {
-    id: crypto.randomUUID(),
     companyName: "Trust Med",
     email: "trust@qarenly.com",
     plan: "Business",
     offers: [
-      {
-        productName: "Panadol Exra",
-        normalizedName: normalizeName("Panadol Exra"),
-        price: 98,
-        discount: 15,
-        finalPrice: 83.3,
-      },
-      {
-        productName: "Augmentin 1 gm",
-        normalizedName: normalizeName("Augmentin 1 gm"),
-        price: 175,
-        discount: 8,
-        finalPrice: 161,
-      },
-      {
-        productName: "Brufen 400",
-        normalizedName: normalizeName("Brufen 400"),
-        price: 48,
-        discount: 10,
-        finalPrice: 43.2,
-      },
+      { productName: "Panadol Exra", price: 98, discount: 15 },
+      { productName: "Augmentin 1 gm", price: 175, discount: 8 },
+      { productName: "Brufen 400", price: 48, discount: 10 },
     ],
   },
   {
-    id: crypto.randomUUID(),
     companyName: "Market Plus",
     email: "market@qarenly.com",
     plan: "Free",
     offers: [
-      {
-        productName: "Panadol Extra",
-        normalizedName: normalizeName("Panadol Extra"),
-        price: 101,
-        discount: 22,
-        finalPrice: 78.78,
-      },
-      {
-        productName: "Cetal500",
-        normalizedName: normalizeName("Cetal500"),
-        price: 31,
-        discount: 8,
-        finalPrice: 28.52,
-      },
-      {
-        productName: "Brufen 400",
-        normalizedName: normalizeName("Brufen 400"),
-        price: 47,
-        discount: 5,
-        finalPrice: 44.65,
-      },
+      { productName: "Panadol Extra", price: 101, discount: 22 },
+      { productName: "Cetal500", price: 31, discount: 8 },
+      { productName: "Brufen 400", price: 47, discount: 5 },
     ],
   },
 ];
+
+const seedCompanies: Company[] = seedCompaniesBase.map((c, i) => ({
+  id: crypto.randomUUID(),
+  companyName: c.companyName,
+  email: c.email,
+  plan: c.plan,
+  code: `C${String(i + 1).padStart(3, "0")}`,
+  uploadedAt: new Date().toISOString(),
+  offers: c.offers.map((o) => ({
+    productName: o.productName,
+    normalizedName: normalizeName(o.productName),
+    price: o.price,
+    discount: o.discount,
+    finalPrice: calcFinalPrice(o.price, o.discount),
+  })),
+}));
 
 const seedUsers: User[] = [
   {
@@ -320,7 +292,7 @@ function Card({
   className?: string;
 }) {
   return (
-    <div className={`rounded-2xl border bg-white shadow-sm ${className}`}>
+    <div className={`rounded-2xl border border-slate-200 bg-white shadow-sm ${className}`}>
       {children}
     </div>
   );
@@ -339,10 +311,30 @@ function StatBox({
     <Card>
       <div className="p-5">
         <div className="text-sm text-slate-500">{title}</div>
-        <div className="mt-2 text-2xl font-bold">{value}</div>
+        <div className="mt-2 text-2xl font-bold text-slate-900">{value}</div>
         {hint ? <div className="mt-1 text-xs text-slate-400">{hint}</div> : null}
       </div>
     </Card>
+  );
+}
+
+function SectionTitle({
+  title,
+  desc,
+  action,
+}: {
+  title: string;
+  desc?: string;
+  action?: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+      <div>
+        <h2 className="text-2xl font-bold text-slate-900">{title}</h2>
+        {desc ? <p className="mt-1 text-sm text-slate-500">{desc}</p> : null}
+      </div>
+      {action}
+    </div>
   );
 }
 
@@ -370,12 +362,15 @@ export default function Page() {
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState("discount");
   const [filterCompany, setFilterCompany] = useState("all");
-  const [companyName, setCompanyName] = useState("");
-  const [uploadReport, setUploadReport] = useState<any>(null);
 
-  const [uploadDraft, setUploadDraft] = useState<any>(null);
-  const [compareDraftA, setCompareDraftA] = useState<any>(null);
-  const [compareDraftB, setCompareDraftB] = useState<any>(null);
+  const [companyName, setCompanyName] = useState("");
+  const [companyCode, setCompanyCode] = useState("");
+  const [uploadReport, setUploadReport] = useState<any>(null);
+  const [productSuggestions, setProductSuggestions] = useState<string[]>([]);
+
+  const [uploadDraft, setUploadDraft] = useState<UploadDraft | null>(null);
+  const [compareDraftA, setCompareDraftA] = useState<UploadDraft | null>(null);
+  const [compareDraftB, setCompareDraftB] = useState<UploadDraft | null>(null);
   const [compareA, setCompareA] = useState<any>(null);
   const [compareB, setCompareB] = useState<any>(null);
   const [compareResult, setCompareResult] = useState<any>(null);
@@ -384,19 +379,30 @@ export default function Page() {
   const compareARef = useRef<HTMLInputElement>(null);
   const compareBRef = useRef<HTMLInputElement>(null);
 
+  const validCompanies = useMemo(() => {
+    const now = Date.now();
+    return companies.filter((company) => {
+      if (!company.uploadedAt) return true;
+      const age = now - new Date(company.uploadedAt).getTime();
+      return age <= SEVEN_DAYS_MS;
+    });
+  }, [companies]);
+
   const allOffers = useMemo(() => {
-    return companies.flatMap((company) =>
+    return validCompanies.flatMap((company) =>
       company.offers.map((offer) => ({
         ...offer,
         companyName: company.companyName,
         companyId: company.id,
         plan: company.plan,
+        code: company.code,
       }))
     );
-  }, [companies]);
+  }, [validCompanies]);
 
   const groupedResults = useMemo(() => {
     const query = normalizeName(search);
+
     let data = allOffers;
 
     if (query) {
@@ -411,11 +417,16 @@ export default function Page() {
       data = data.filter((offer) => offer.companyId === filterCompany);
     }
 
-    const groups: any[] = [];
+    const groups: Array<{
+      key: string;
+      anchor: string;
+      displayName: string;
+      rows: any[];
+    }> = [];
 
     for (const row of data) {
       let group = groups.find(
-        (g) => similarityScore(g.anchor, row.productName) >= 0.8
+        (g) => similarityScore(g.anchor, row.productName) >= MATCH_THRESHOLD
       );
 
       if (!group) {
@@ -432,7 +443,7 @@ export default function Page() {
     }
 
     groups.forEach((group) => {
-      group.rows.sort((a: any, b: any) => {
+      group.rows.sort((a, b) => {
         if (sortBy === "discount") {
           return b.discount - a.discount || a.finalPrice - b.finalPrice;
         }
@@ -444,9 +455,8 @@ export default function Page() {
     });
 
     groups.sort((a, b) => a.displayName.localeCompare(b.displayName));
-
     return groups;
-  }, [allOffers, search, sortBy, filterCompany]);
+  }, [allOffers, filterCompany, search, sortBy]);
 
   const productCount = groupedResults.length;
 
@@ -458,10 +468,26 @@ export default function Page() {
 
   const myCompany = useMemo(() => {
     if (!currentUser || currentUser.role !== "supplier") return null;
-    return companies.find(
+    return validCompanies.find(
       (c) => normalizeName(c.companyName) === normalizeName(currentUser.companyName)
     );
-  }, [companies, currentUser]);
+  }, [currentUser, validCompanies]);
+
+  const marketLeaderboard = useMemo(() => {
+    return validCompanies
+      .map((company) => {
+        const offers = company.offers || [];
+        const avg = offers.length
+          ? offers.reduce((sum, row) => sum + row.discount, 0) / offers.length
+          : 0;
+        return {
+          ...company,
+          avgDiscount: avg.toFixed(1),
+          items: offers.length,
+        };
+      })
+      .sort((a, b) => Number(b.avgDiscount) - Number(a.avgDiscount));
+  }, [validCompanies]);
 
   const login = () => {
     const found = users.find(
@@ -511,6 +537,8 @@ export default function Page() {
         companyName: registerForm.companyName,
         email: registerForm.email,
         plan: "Free",
+        code: `C${String(prev.length + 1).padStart(3, "0")}`,
+        uploadedAt: new Date().toISOString(),
         offers: [],
       },
     ]);
@@ -558,12 +586,20 @@ export default function Page() {
 
     setCompanies((prev) => {
       const existingIndex = prev.findIndex(
-        (c) => normalizeName(c.companyName) === normalizeName(resolvedCompanyName)
+        (c) =>
+          normalizeName(c.companyName) === normalizeName(resolvedCompanyName) ||
+          (!!companyCode && c.code === companyCode)
       );
 
       if (existingIndex >= 0) {
         const clone = [...prev];
-        clone[existingIndex] = { ...clone[existingIndex], offers: mappedOffers };
+        clone[existingIndex] = {
+          ...clone[existingIndex],
+          companyName: resolvedCompanyName,
+          code: clone[existingIndex].code || companyCode,
+          offers: mappedOffers,
+          uploadedAt: new Date().toISOString(),
+        };
         return clone;
       }
 
@@ -574,6 +610,8 @@ export default function Page() {
           companyName: resolvedCompanyName,
           email: currentUser?.email || "",
           plan: "Free",
+          code: companyCode || `C${String(prev.length + 1).padStart(3, "0")}`,
+          uploadedAt: new Date().toISOString(),
           offers: mappedOffers,
         },
       ];
@@ -586,10 +624,18 @@ export default function Page() {
       valid: validRows.length,
       invalid: invalidRows,
       mapping: uploadDraft.mapping,
+      expiresIn: "7 days",
+      companyCode:
+        companyCode ||
+        validCompanies.find(
+          (c) => normalizeName(c.companyName) === normalizeName(resolvedCompanyName)
+        )?.code ||
+        "سيتم التكويد",
     });
 
     setUploadDraft(null);
     setCompanyName("");
+    setCompanyCode("");
   };
 
   const handleCompareDraft = async (
@@ -609,7 +655,7 @@ export default function Page() {
     const payload = {
       ...draft,
       mapping,
-      label: which === "A" ? "ملف 1" : "ملف 2",
+      fileName: draft.fileName,
     };
 
     if (which === "A") setCompareDraftA(payload);
@@ -627,7 +673,7 @@ export default function Page() {
       .map(({ rowNumber, errors, valid, ...rest }) => rest);
 
     const payload = {
-      name: draft.label,
+      name: which === "A" ? "ملف 1" : "ملف 2",
       rawName: draft.fileName,
       rows,
       mapping: draft.mapping,
@@ -654,7 +700,7 @@ export default function Page() {
       const match = bestMatch(
         a.productName,
         bKeys.filter((name: string) => !usedB.has(name)),
-        0.8
+        MATCH_THRESHOLD
       );
 
       if (!match) {
@@ -679,7 +725,6 @@ export default function Page() {
 
       shared.push({
         key: `${a.productName}-${b.productName}`,
-        productName: a.productName,
         a,
         b,
         similarity: +(match.score * 100).toFixed(0),
@@ -688,17 +733,14 @@ export default function Page() {
     }
 
     const onlyB = compareB.rows.filter((row: any) => !usedB.has(row.productName));
-    const aBetter = shared.filter((r) => r.winner === compareA.name).length;
-    const bBetter = shared.filter((r) => r.winner === compareB.name).length;
-    const equal = shared.filter((r) => r.winner === "Equal").length;
 
     setCompareResult({
       shared,
       onlyA,
       onlyB,
-      aBetter,
-      bBetter,
-      equal,
+      aBetter: shared.filter((r) => r.winner === compareA.name).length,
+      bBetter: shared.filter((r) => r.winner === compareB.name).length,
+      equal: shared.filter((r) => r.winner === "Equal").length,
       totalA: compareA.rows.length,
       totalB: compareB.rows.length,
       sharedCount: shared.length,
@@ -722,53 +764,73 @@ export default function Page() {
       winner: row.winner,
     }));
 
-    if (rows.length) {
-      downloadCsv(rows, "comparison-results.csv");
-    }
+    if (rows.length) downloadCsv(rows, "comparison-results.csv");
   };
 
   const removeCompany = (id: string) => {
     setCompanies((prev) => prev.filter((c) => c.id !== id));
   };
 
+  const onSearchChange = (value: string) => {
+    setSearch(value);
+
+    if (value.trim().length >= 3) {
+      const suggestions = Array.from(
+        new Set(
+          allOffers
+            .filter((offer) =>
+              normalizeName(offer.productName).includes(normalizeName(value))
+            )
+            .map((offer) => offer.productName)
+        )
+      ).slice(0, 8);
+
+      setProductSuggestions(suggestions);
+    } else {
+      setProductSuggestions([]);
+    }
+  };
+
   if (!currentUser) {
     return (
-      <div className="min-h-screen bg-slate-50 p-4 md:p-8">
-        <div className="mx-auto grid max-w-7xl gap-6 lg:grid-cols-[1.1fr_.9fr]">
-          <Card className="border-0 bg-gradient-to-br from-white to-slate-100 shadow-lg">
+      <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white p-4 md:p-8">
+        <div className="mx-auto grid max-w-7xl gap-6 lg:grid-cols-[1.15fr_.85fr]">
+          <Card className="border-0 bg-gradient-to-br from-slate-900 via-slate-800 to-slate-700 text-white shadow-xl">
             <div className="p-8 md:p-10">
-              <div className="mb-4 inline-block rounded-full bg-black px-4 py-1 text-sm text-white">
-                Qarenly SaaS
+              <div className="mb-4 inline-block rounded-full bg-white/10 px-4 py-1 text-sm">
+                Qarenly Pro
               </div>
               <h1 className="text-3xl font-bold tracking-tight md:text-5xl">
-                منصة ذكية لمقارنة الخصومات والأسعار
+                منصة احترافية لمقارنة الخصومات والأسعار
               </h1>
-              <p className="mt-4 max-w-2xl text-base text-slate-600 md:text-lg">
-                ارفع Excel وحدد بنفسك عمود الاسم وعمود السعر وعمود الخصم، ثم
-                قارن الأصناف بنسبة تشابه 80% لمراعاة اختلاف الكتابة.
+              <p className="mt-4 max-w-2xl text-base text-slate-200 md:text-lg">
+                تكويد العملاء بواسطة الأدمن، رفع مرن للإكسيل باختيار الأعمدة،
+                استبدال تلقائي لملف العميل القديم، حذف تلقائي بعد 7 أيام،
+                واقتراحات أصناف بمجرد كتابة أول 3 حروف.
               </p>
-              <div className="mt-6 grid gap-4 sm:grid-cols-3">
-                <StatBox title="الشركات" value={companies.length} hint="موردون وعملاء" />
-                <StatBox title="العروض" value={allOffers.length} hint="إجمالي العروض" />
+
+              <div className="mt-8 grid gap-4 sm:grid-cols-3">
+                <StatBox title="الشركات" value={validCompanies.length} hint="فعالة خلال 7 أيام" />
+                <StatBox title="العروض" value={allOffers.length} hint="إجمالي العروض الفعالة" />
                 <StatBox title="متوسط الخصم" value={`${avgDiscount}%`} hint="على مستوى السوق" />
               </div>
             </div>
           </Card>
 
-          <Card className="shadow-lg">
+          <Card className="shadow-xl">
             <div className="p-6">
-              <h2 className="text-2xl font-bold">
+              <h2 className="text-2xl font-bold text-slate-900">
                 {authMode === "login" ? "تسجيل الدخول" : "إنشاء حساب مورد"}
               </h2>
               <p className="mt-2 text-sm text-slate-500">
-                جرب بحساب الأدمن أو أنشئ حساب مورد جديد.
+                حساب الأدمن يدير الأكواد والعملاء، والمورد يرفع ملفه فقط.
               </p>
 
-              <div className="mt-4 space-y-4">
+              <div className="mt-5 space-y-4">
                 {authMode === "login" ? (
                   <>
                     <input
-                      className="w-full rounded-xl border p-3"
+                      className="w-full rounded-xl border border-slate-300 p-3 outline-none focus:border-slate-700"
                       placeholder="البريد الإلكتروني"
                       value={loginForm.email}
                       onChange={(e) =>
@@ -776,7 +838,7 @@ export default function Page() {
                       }
                     />
                     <input
-                      className="w-full rounded-xl border p-3"
+                      className="w-full rounded-xl border border-slate-300 p-3 outline-none focus:border-slate-700"
                       type="password"
                       placeholder="كلمة المرور"
                       value={loginForm.password}
@@ -785,12 +847,12 @@ export default function Page() {
                       }
                     />
                     <button
-                      className="w-full rounded-xl bg-black p-3 text-white"
+                      className="w-full rounded-xl bg-slate-900 p-3 font-medium text-white hover:bg-slate-800"
                       onClick={login}
                     >
                       دخول
                     </button>
-                    <div className="rounded-xl border p-4 text-sm text-slate-500">
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
                       <p>حساب الأدمن: admin@qarenly.com</p>
                       <p>كلمة المرور: 123456</p>
                     </div>
@@ -798,7 +860,7 @@ export default function Page() {
                 ) : (
                   <>
                     <input
-                      className="w-full rounded-xl border p-3"
+                      className="w-full rounded-xl border border-slate-300 p-3 outline-none focus:border-slate-700"
                       placeholder="الاسم"
                       value={registerForm.name}
                       onChange={(e) =>
@@ -806,7 +868,7 @@ export default function Page() {
                       }
                     />
                     <input
-                      className="w-full rounded-xl border p-3"
+                      className="w-full rounded-xl border border-slate-300 p-3 outline-none focus:border-slate-700"
                       placeholder="اسم الشركة"
                       value={registerForm.companyName}
                       onChange={(e) =>
@@ -817,7 +879,7 @@ export default function Page() {
                       }
                     />
                     <input
-                      className="w-full rounded-xl border p-3"
+                      className="w-full rounded-xl border border-slate-300 p-3 outline-none focus:border-slate-700"
                       placeholder="البريد الإلكتروني"
                       value={registerForm.email}
                       onChange={(e) =>
@@ -825,7 +887,7 @@ export default function Page() {
                       }
                     />
                     <input
-                      className="w-full rounded-xl border p-3"
+                      className="w-full rounded-xl border border-slate-300 p-3 outline-none focus:border-slate-700"
                       type="password"
                       placeholder="كلمة المرور"
                       value={registerForm.password}
@@ -834,7 +896,7 @@ export default function Page() {
                       }
                     />
                     <button
-                      className="w-full rounded-xl bg-black p-3 text-white"
+                      className="w-full rounded-xl bg-slate-900 p-3 font-medium text-white hover:bg-slate-800"
                       onClick={register}
                     >
                       إنشاء الحساب
@@ -849,7 +911,7 @@ export default function Page() {
                 ) : null}
 
                 <button
-                  className="w-full rounded-xl border p-3"
+                  className="w-full rounded-xl border border-slate-300 p-3 hover:bg-slate-50"
                   onClick={() => {
                     setAuthMode(authMode === "login" ? "register" : "login");
                     setAuthError("");
@@ -871,25 +933,32 @@ export default function Page() {
   const topOffer = [...myOffers].sort((a, b) => b.discount - a.discount)[0];
 
   return (
-    <div className="min-h-screen bg-slate-50 p-4 md:p-8">
+    <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white p-4 md:p-8">
       <div className="mx-auto max-w-7xl space-y-8">
         <Card className="border-0 shadow-lg">
           <div className="flex flex-col gap-5 p-6 md:flex-row md:items-center md:justify-between">
             <div>
-              <div className="flex items-center gap-2">
-                <div className="rounded-full bg-black px-4 py-1 text-sm text-white">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="rounded-full bg-slate-900 px-4 py-1 text-sm text-white">
                   {currentUser.role === "admin" ? "Admin" : "Supplier"}
                 </div>
-                <div className="rounded-full bg-slate-100 px-4 py-1 text-sm">
+                <div className="rounded-full bg-slate-100 px-4 py-1 text-sm text-slate-700">
                   {currentUser.companyName}
                 </div>
               </div>
-              <h1 className="mt-3 text-3xl font-bold">مرحبًا، {currentUser.name}</h1>
+              <h1 className="mt-3 text-3xl font-bold text-slate-900">
+                مرحبًا، {currentUser.name}
+              </h1>
               <p className="mt-1 text-sm text-slate-500">
-                رفع مرن للأعمدة + مقارنة بنسبة تشابه 80% بين الأصناف.
+                واجهة أكثر احترافية، مع تكويد العملاء بواسطة الأدمن، واستبدال تلقائي
+                لملف نفس العميل، ومسح تلقائي بعد 7 أيام، واقتراحات أصناف عند كتابة
+                أول 3 حروف.
               </p>
             </div>
-            <button className="rounded-xl border px-4 py-2" onClick={logout}>
+            <button
+              className="rounded-xl border border-slate-300 px-4 py-2 hover:bg-slate-50"
+              onClick={logout}
+            >
               تسجيل خروج
             </button>
           </div>
@@ -898,25 +967,43 @@ export default function Page() {
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <button
             onClick={() => setActiveTab("market")}
-            className={`rounded-xl p-3 ${activeTab === "market" ? "bg-black text-white" : "border bg-white"}`}
+            className={`rounded-xl p-3 font-medium ${
+              activeTab === "market"
+                ? "bg-slate-900 text-white"
+                : "border border-slate-300 bg-white text-slate-700"
+            }`}
           >
             بحث السوق
           </button>
           <button
             onClick={() => setActiveTab("upload")}
-            className={`rounded-xl p-3 ${activeTab === "upload" ? "bg-black text-white" : "border bg-white"}`}
+            className={`rounded-xl p-3 font-medium ${
+              activeTab === "upload"
+                ? "bg-slate-900 text-white"
+                : "border border-slate-300 bg-white text-slate-700"
+            }`}
           >
             رفع ملف
           </button>
           <button
             onClick={() => setActiveTab("compare")}
-            className={`rounded-xl p-3 ${activeTab === "compare" ? "bg-black text-white" : "border bg-white"}`}
+            className={`rounded-xl p-3 font-medium ${
+              activeTab === "compare"
+                ? "bg-slate-900 text-white"
+                : "border border-slate-300 bg-white text-slate-700"
+            }`}
           >
             قارن ملفين
           </button>
           <button
-            onClick={() => setActiveTab(currentUser.role === "admin" ? "admin" : "dashboard")}
-            className={`rounded-xl p-3 ${activeTab === (currentUser.role === "admin" ? "admin" : "dashboard") ? "bg-black text-white" : "border bg-white"}`}
+            onClick={() =>
+              setActiveTab(currentUser.role === "admin" ? "admin" : "dashboard")
+            }
+            className={`rounded-xl p-3 font-medium ${
+              activeTab === (currentUser.role === "admin" ? "admin" : "dashboard")
+                ? "bg-slate-900 text-white"
+                : "border border-slate-300 bg-white text-slate-700"
+            }`}
           >
             {currentUser.role === "admin" ? "الأدمن" : "لوحتي"}
           </button>
@@ -926,23 +1013,40 @@ export default function Page() {
           <div className="space-y-6">
             <Card>
               <div className="p-6">
-                <h2 className="text-2xl font-bold">محرك مقارنة السوق</h2>
-                <p className="mt-2 text-sm text-slate-500">
-                  عند البحث عن أي صنف ستظهر كل الشركات أو العملاء العارضين له، مع
-                  اسم كل عميل وبجواره الخصم والسعر والسعر النهائي، مرتبين لسهولة
-                  معرفة أعلى خصم.
-                </p>
+                <SectionTitle
+                  title="محرك مقارنة السوق"
+                  desc="عند البحث عن أي صنف ستظهر كل الشركات أو العملاء العارضين له، مع اسم العميل والكود والخصم والسعر والسعر النهائي، مرتبين حسب أعلى خصم."
+                />
 
                 <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_220px_260px]">
-                  <input
-                    className="rounded-xl border p-3"
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    placeholder="ابحث باسم الصنف أو الشركة..."
-                  />
+                  <div className="relative">
+                    <input
+                      className="w-full rounded-xl border border-slate-300 p-3 outline-none focus:border-slate-700"
+                      value={search}
+                      onChange={(e) => onSearchChange(e.target.value)}
+                      placeholder="ابحث باسم الصنف أو الشركة..."
+                    />
+                    {productSuggestions.length > 0 && (
+                      <div className="absolute z-10 mt-1 w-full rounded-xl border border-slate-200 bg-white shadow-lg">
+                        {productSuggestions.map((suggestion) => (
+                          <button
+                            key={suggestion}
+                            type="button"
+                            className="block w-full border-b border-slate-100 px-4 py-2 text-right text-sm hover:bg-slate-50"
+                            onClick={() => {
+                              setSearch(suggestion);
+                              setProductSuggestions([]);
+                            }}
+                          >
+                            {suggestion}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
 
                   <select
-                    className="rounded-xl border p-3"
+                    className="rounded-xl border border-slate-300 p-3 outline-none focus:border-slate-700"
                     value={sortBy}
                     onChange={(e) => setSortBy(e.target.value)}
                   >
@@ -952,12 +1056,12 @@ export default function Page() {
                   </select>
 
                   <select
-                    className="rounded-xl border p-3"
+                    className="rounded-xl border border-slate-300 p-3 outline-none focus:border-slate-700"
                     value={filterCompany}
                     onChange={(e) => setFilterCompany(e.target.value)}
                   >
                     <option value="all">كل الشركات</option>
-                    {companies.map((company) => (
+                    {validCompanies.map((company) => (
                       <option key={company.id} value={company.id}>
                         {company.companyName}
                       </option>
@@ -968,7 +1072,7 @@ export default function Page() {
             </Card>
 
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-              <StatBox title="إجمالي الشركات" value={companies.length} />
+              <StatBox title="إجمالي الشركات" value={validCompanies.length} hint="فعالة خلال 7 أيام" />
               <StatBox title="إجمالي العروض" value={allOffers.length} />
               <StatBox title="مجموعات الأصناف" value={productCount} hint="بالتجميع الذكي 80%" />
               <StatBox title="متوسط الخصم" value={`${avgDiscount}%`} />
@@ -985,12 +1089,12 @@ export default function Page() {
                     <div className="p-6">
                       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                         <div>
-                          <h3 className="text-xl font-bold">{group.displayName}</h3>
+                          <h3 className="text-xl font-bold text-slate-900">{group.displayName}</h3>
                           <p className="text-sm text-slate-500">
                             {group.rows.length} عروض متقاربة
                           </p>
                         </div>
-                        <div className="rounded-full bg-slate-100 px-4 py-1 text-sm">
+                        <div className="rounded-full bg-slate-100 px-4 py-1 text-sm text-slate-700">
                           أفضل عرض:{" "}
                           {sortBy === "final"
                             ? `${currency(group.rows[0].finalPrice)} ج`
@@ -1001,9 +1105,10 @@ export default function Page() {
                       <div className="overflow-x-auto">
                         <table className="min-w-full border-collapse">
                           <thead>
-                            <tr className="border-b text-right text-sm text-slate-500">
+                            <tr className="border-b border-slate-200 text-right text-sm text-slate-500">
                               <th className="p-3">الترتيب</th>
                               <th className="p-3">الشركة / العميل</th>
+                              <th className="p-3">الكود</th>
                               <th className="p-3">اسم الصنف</th>
                               <th className="p-3">الخصم</th>
                               <th className="p-3">السعر</th>
@@ -1012,11 +1117,22 @@ export default function Page() {
                           </thead>
                           <tbody>
                             {group.rows.map((row: any, index: number) => (
-                              <tr key={`${row.companyId}-${index}`} className="border-b">
+                              <tr key={`${row.companyId}-${index}`} className="border-b border-slate-100">
                                 <td className="p-3">{index + 1}</td>
-                                <td className="p-3 font-medium">{row.companyName}</td>
+                                <td className="p-3 font-medium text-slate-900">{row.companyName}</td>
+                                <td className="p-3">{row.code || "—"}</td>
                                 <td className="p-3">{row.productName}</td>
-                                <td className="p-3">{row.discount}%</td>
+                                <td className="p-3">
+                                  <span
+                                    className={`rounded-full px-3 py-1 text-sm ${
+                                      index === 0
+                                        ? "bg-emerald-100 text-emerald-700"
+                                        : "bg-slate-100 text-slate-700"
+                                    }`}
+                                  >
+                                    {row.discount}%
+                                  </span>
+                                </td>
                                 <td className="p-3">{currency(row.price)} ج</td>
                                 <td className="p-3">{currency(row.finalPrice)} ج</td>
                               </tr>
@@ -1035,35 +1151,41 @@ export default function Page() {
         {activeTab === "upload" && (
           <Card>
             <div className="p-6 space-y-5">
-              <h2 className="text-2xl font-bold">رفع ملف شركة</h2>
-              <p className="text-sm text-slate-500">
-                بعد رفع الملف ستختار بنفسك: عمود الاسم + عمود السعر + عمود الخصم.
-              </p>
+              <SectionTitle
+                title="رفع ملف شركة"
+                desc="بعد رفع الملف ستختار بنفسك: عمود الاسم + عمود السعر + عمود الخصم. تكويد العميل يتم بواسطة الأدمن، ورفع ملف جديد لنفس العميل يستبدل القديم تلقائيًا، وكل ملف صلاحيته 7 أيام فقط."
+              />
 
               {currentUser.role !== "supplier" ? (
-                <div className="grid gap-4 md:grid-cols-[1fr_auto]">
+                <div className="grid gap-4 md:grid-cols-[1fr_220px_auto]">
                   <input
-                    className="rounded-xl border p-3"
+                    className="rounded-xl border border-slate-300 p-3 outline-none focus:border-slate-700"
                     value={companyName}
                     onChange={(e) => setCompanyName(e.target.value)}
                     placeholder="اسم الشركة أو العميل"
                   />
+                  <input
+                    className="rounded-xl border border-slate-300 p-3 outline-none focus:border-slate-700"
+                    value={companyCode}
+                    onChange={(e) => setCompanyCode(e.target.value)}
+                    placeholder="كود العميل (يحدده الأدمن)"
+                  />
                   <button
-                    className="rounded-xl bg-black px-4 py-3 text-white"
+                    className="rounded-xl bg-slate-900 px-4 py-3 text-white hover:bg-slate-800"
                     onClick={() => companyFileRef.current?.click()}
                   >
                     اختر ملف Excel
                   </button>
                 </div>
               ) : (
-                <div className="rounded-xl border p-4 text-sm text-slate-500">
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
                   سيتم ربط الملف تلقائيًا بشركتك: <strong>{currentUser.companyName}</strong>
                 </div>
               )}
 
               {currentUser.role === "supplier" && (
                 <button
-                  className="rounded-xl bg-black px-4 py-3 text-white"
+                  className="rounded-xl bg-slate-900 px-4 py-3 text-white hover:bg-slate-800"
                   onClick={() => companyFileRef.current?.click()}
                 >
                   رفع ملف Excel
@@ -1079,21 +1201,25 @@ export default function Page() {
               />
 
               {uploadDraft && (
-                <Card>
+                <Card className="bg-slate-50">
                   <div className="grid gap-4 p-5 md:grid-cols-3">
                     <div>
-                      <p className="mb-2 text-sm font-medium">اختار عمود الاسم</p>
+                      <p className="mb-2 text-sm font-medium text-slate-700">اختار عمود الاسم</p>
                       <select
-                        className="w-full rounded-xl border p-3"
+                        className="w-full rounded-xl border border-slate-300 p-3"
                         value={uploadDraft.mapping.name}
                         onChange={(e) =>
-                          setUploadDraft((prev: any) => ({
-                            ...prev,
-                            mapping: { ...prev.mapping, name: e.target.value },
-                          }))
+                          setUploadDraft((prev) =>
+                            prev
+                              ? {
+                                  ...prev,
+                                  mapping: { ...prev.mapping, name: e.target.value },
+                                }
+                              : prev
+                          )
                         }
                       >
-                        {uploadDraft.headers.map((h: string) => (
+                        {uploadDraft.headers.map((h) => (
                           <option key={h} value={h}>
                             {h}
                           </option>
@@ -1102,18 +1228,22 @@ export default function Page() {
                     </div>
 
                     <div>
-                      <p className="mb-2 text-sm font-medium">اختار عمود السعر</p>
+                      <p className="mb-2 text-sm font-medium text-slate-700">اختار عمود السعر</p>
                       <select
-                        className="w-full rounded-xl border p-3"
+                        className="w-full rounded-xl border border-slate-300 p-3"
                         value={uploadDraft.mapping.price}
                         onChange={(e) =>
-                          setUploadDraft((prev: any) => ({
-                            ...prev,
-                            mapping: { ...prev.mapping, price: e.target.value },
-                          }))
+                          setUploadDraft((prev) =>
+                            prev
+                              ? {
+                                  ...prev,
+                                  mapping: { ...prev.mapping, price: e.target.value },
+                                }
+                              : prev
+                          )
                         }
                       >
-                        {uploadDraft.headers.map((h: string) => (
+                        {uploadDraft.headers.map((h) => (
                           <option key={h} value={h}>
                             {h}
                           </option>
@@ -1122,18 +1252,22 @@ export default function Page() {
                     </div>
 
                     <div>
-                      <p className="mb-2 text-sm font-medium">اختار عمود الخصم</p>
+                      <p className="mb-2 text-sm font-medium text-slate-700">اختار عمود الخصم</p>
                       <select
-                        className="w-full rounded-xl border p-3"
+                        className="w-full rounded-xl border border-slate-300 p-3"
                         value={uploadDraft.mapping.discount}
                         onChange={(e) =>
-                          setUploadDraft((prev: any) => ({
-                            ...prev,
-                            mapping: { ...prev.mapping, discount: e.target.value },
-                          }))
+                          setUploadDraft((prev) =>
+                            prev
+                              ? {
+                                  ...prev,
+                                  mapping: { ...prev.mapping, discount: e.target.value },
+                                }
+                              : prev
+                          )
                         }
                       >
-                        {uploadDraft.headers.map((h: string) => (
+                        {uploadDraft.headers.map((h) => (
                           <option key={h} value={h}>
                             {h}
                           </option>
@@ -1143,13 +1277,13 @@ export default function Page() {
 
                     <div className="flex gap-3 md:col-span-3">
                       <button
-                        className="rounded-xl bg-black px-4 py-3 text-white"
+                        className="rounded-xl bg-slate-900 px-4 py-3 text-white hover:bg-slate-800"
                         onClick={finalizeUpload}
                       >
                         تأكيد الأعمدة ورفع البيانات
                       </button>
                       <button
-                        className="rounded-xl border px-4 py-3"
+                        className="rounded-xl border border-slate-300 px-4 py-3 hover:bg-white"
                         onClick={() => setUploadDraft(null)}
                       >
                         إلغاء
@@ -1162,15 +1296,18 @@ export default function Page() {
               {uploadReport && (
                 <Card>
                   <div className="space-y-4 p-5">
-                    <div className="grid gap-3 md:grid-cols-4">
+                    <div className="grid gap-3 md:grid-cols-6">
                       <StatBox title="اسم الملف" value={uploadReport.fileName} />
+                      <StatBox title="العميل" value={uploadReport.companyName} />
+                      <StatBox title="الكود" value={uploadReport.companyCode} />
                       <StatBox title="عمود الاسم" value={uploadReport.mapping.name} />
                       <StatBox title="عمود السعر" value={uploadReport.mapping.price} />
                       <StatBox title="عمود الخصم" value={uploadReport.mapping.discount} />
                     </div>
-                    <div className="grid gap-3 md:grid-cols-2">
+                    <div className="grid gap-3 md:grid-cols-3">
                       <StatBox title="صفوف صحيحة" value={uploadReport.valid} />
                       <StatBox title="صفوف بها أخطاء" value={uploadReport.invalid.length} />
+                      <StatBox title="الصلاحية" value={uploadReport.expiresIn} />
                     </div>
                   </div>
                 </Card>
@@ -1181,19 +1318,19 @@ export default function Page() {
 
         {activeTab === "compare" && (
           <div className="space-y-6">
-            <Card>
+            <Card className="bg-slate-50">
               <div className="p-5 text-sm text-slate-600">
-                المنصة تطابق الأصناف بنسبة تشابه 80% حتى مع الاختلافات البسيطة في
-                الكتابة.
+                المنصة تطابق الأصناف بنسبة تشابه 80% حتى مع الاختلافات البسيطة في الكتابة.
+                وفي كل ملف تختار عمود الاسم وعمود السعر وعمود الخصم قبل اعتماد المقارنة.
               </div>
             </Card>
 
             <div className="grid gap-6 lg:grid-cols-2">
               <Card>
                 <div className="p-6">
-                  <h3 className="mb-4 text-xl font-bold">رفع الملف الأول</h3>
+                  <h3 className="mb-4 text-xl font-bold text-slate-900">رفع الملف الأول</h3>
                   <button
-                    className="w-full rounded-xl border p-3"
+                    className="w-full rounded-xl border border-slate-300 p-3 hover:bg-slate-50"
                     onClick={() => compareARef.current?.click()}
                   >
                     رفع الملف الأول
@@ -1203,9 +1340,9 @@ export default function Page() {
 
               <Card>
                 <div className="p-6">
-                  <h3 className="mb-4 text-xl font-bold">رفع الملف الثاني</h3>
+                  <h3 className="mb-4 text-xl font-bold text-slate-900">رفع الملف الثاني</h3>
                   <button
-                    className="w-full rounded-xl border p-3"
+                    className="w-full rounded-xl border border-slate-300 p-3 hover:bg-slate-50"
                     onClick={() => compareBRef.current?.click()}
                   >
                     رفع الملف الثاني
@@ -1232,7 +1369,7 @@ export default function Page() {
             <div className="grid gap-6 lg:grid-cols-2">
               <Card>
                 <div className="space-y-4 p-6">
-                  <h3 className="text-xl font-bold">إعداد الملف الأول</h3>
+                  <h3 className="text-xl font-bold text-slate-900">إعداد الملف الأول</h3>
                   <p className="text-sm text-slate-500">
                     حدد عمود الاسم وعمود السعر وعمود الخصم قبل اعتماد الملف.
                   </p>
@@ -1241,20 +1378,24 @@ export default function Page() {
                     <p className="text-sm text-slate-500">لم يتم رفع الملف بعد.</p>
                   ) : (
                     <>
-                      <div className="rounded-xl border p-4 text-sm text-slate-500">
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
                         {compareDraftA.fileName}
                       </div>
 
                       <div>
-                        <p className="mb-2 text-sm font-medium">عمود الاسم</p>
+                        <p className="mb-2 text-sm font-medium text-slate-700">عمود الاسم</p>
                         <select
-                          className="w-full rounded-xl border p-3"
+                          className="w-full rounded-xl border border-slate-300 p-3"
                           value={compareDraftA.mapping.name}
                           onChange={(e) =>
-                            setCompareDraftA((prev: any) => ({
-                              ...prev,
-                              mapping: { ...prev.mapping, name: e.target.value },
-                            }))
+                            setCompareDraftA((prev) =>
+                              prev
+                                ? {
+                                    ...prev,
+                                    mapping: { ...prev.mapping, name: e.target.value },
+                                  }
+                                : prev
+                            )
                           }
                         >
                           {compareDraftA.headers.map((h: string) => (
@@ -1266,15 +1407,19 @@ export default function Page() {
                       </div>
 
                       <div>
-                        <p className="mb-2 text-sm font-medium">عمود السعر</p>
+                        <p className="mb-2 text-sm font-medium text-slate-700">عمود السعر</p>
                         <select
-                          className="w-full rounded-xl border p-3"
+                          className="w-full rounded-xl border border-slate-300 p-3"
                           value={compareDraftA.mapping.price}
                           onChange={(e) =>
-                            setCompareDraftA((prev: any) => ({
-                              ...prev,
-                              mapping: { ...prev.mapping, price: e.target.value },
-                            }))
+                            setCompareDraftA((prev) =>
+                              prev
+                                ? {
+                                    ...prev,
+                                    mapping: { ...prev.mapping, price: e.target.value },
+                                  }
+                                : prev
+                            )
                           }
                         >
                           {compareDraftA.headers.map((h: string) => (
@@ -1286,15 +1431,19 @@ export default function Page() {
                       </div>
 
                       <div>
-                        <p className="mb-2 text-sm font-medium">عمود الخصم</p>
+                        <p className="mb-2 text-sm font-medium text-slate-700">عمود الخصم</p>
                         <select
-                          className="w-full rounded-xl border p-3"
+                          className="w-full rounded-xl border border-slate-300 p-3"
                           value={compareDraftA.mapping.discount}
                           onChange={(e) =>
-                            setCompareDraftA((prev: any) => ({
-                              ...prev,
-                              mapping: { ...prev.mapping, discount: e.target.value },
-                            }))
+                            setCompareDraftA((prev) =>
+                              prev
+                                ? {
+                                    ...prev,
+                                    mapping: { ...prev.mapping, discount: e.target.value },
+                                  }
+                                : prev
+                            )
                           }
                         >
                           {compareDraftA.headers.map((h: string) => (
@@ -1306,7 +1455,7 @@ export default function Page() {
                       </div>
 
                       <button
-                        className="w-full rounded-xl bg-black p-3 text-white"
+                        className="w-full rounded-xl bg-slate-900 p-3 text-white hover:bg-slate-800"
                         onClick={() => finalizeCompareFile("A")}
                       >
                         اعتماد الملف
@@ -1318,7 +1467,7 @@ export default function Page() {
 
               <Card>
                 <div className="space-y-4 p-6">
-                  <h3 className="text-xl font-bold">إعداد الملف الثاني</h3>
+                  <h3 className="text-xl font-bold text-slate-900">إعداد الملف الثاني</h3>
                   <p className="text-sm text-slate-500">
                     حدد عمود الاسم وعمود السعر وعمود الخصم قبل اعتماد الملف.
                   </p>
@@ -1327,20 +1476,24 @@ export default function Page() {
                     <p className="text-sm text-slate-500">لم يتم رفع الملف بعد.</p>
                   ) : (
                     <>
-                      <div className="rounded-xl border p-4 text-sm text-slate-500">
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
                         {compareDraftB.fileName}
                       </div>
 
                       <div>
-                        <p className="mb-2 text-sm font-medium">عمود الاسم</p>
+                        <p className="mb-2 text-sm font-medium text-slate-700">عمود الاسم</p>
                         <select
-                          className="w-full rounded-xl border p-3"
+                          className="w-full rounded-xl border border-slate-300 p-3"
                           value={compareDraftB.mapping.name}
                           onChange={(e) =>
-                            setCompareDraftB((prev: any) => ({
-                              ...prev,
-                              mapping: { ...prev.mapping, name: e.target.value },
-                            }))
+                            setCompareDraftB((prev) =>
+                              prev
+                                ? {
+                                    ...prev,
+                                    mapping: { ...prev.mapping, name: e.target.value },
+                                  }
+                                : prev
+                            )
                           }
                         >
                           {compareDraftB.headers.map((h: string) => (
@@ -1352,15 +1505,19 @@ export default function Page() {
                       </div>
 
                       <div>
-                        <p className="mb-2 text-sm font-medium">عمود السعر</p>
+                        <p className="mb-2 text-sm font-medium text-slate-700">عمود السعر</p>
                         <select
-                          className="w-full rounded-xl border p-3"
+                          className="w-full rounded-xl border border-slate-300 p-3"
                           value={compareDraftB.mapping.price}
                           onChange={(e) =>
-                            setCompareDraftB((prev: any) => ({
-                              ...prev,
-                              mapping: { ...prev.mapping, price: e.target.value },
-                            }))
+                            setCompareDraftB((prev) =>
+                              prev
+                                ? {
+                                    ...prev,
+                                    mapping: { ...prev.mapping, price: e.target.value },
+                                  }
+                                : prev
+                            )
                           }
                         >
                           {compareDraftB.headers.map((h: string) => (
@@ -1372,15 +1529,19 @@ export default function Page() {
                       </div>
 
                       <div>
-                        <p className="mb-2 text-sm font-medium">عمود الخصم</p>
+                        <p className="mb-2 text-sm font-medium text-slate-700">عمود الخصم</p>
                         <select
-                          className="w-full rounded-xl border p-3"
+                          className="w-full rounded-xl border border-slate-300 p-3"
                           value={compareDraftB.mapping.discount}
                           onChange={(e) =>
-                            setCompareDraftB((prev: any) => ({
-                              ...prev,
-                              mapping: { ...prev.mapping, discount: e.target.value },
-                            }))
+                            setCompareDraftB((prev) =>
+                              prev
+                                ? {
+                                    ...prev,
+                                    mapping: { ...prev.mapping, discount: e.target.value },
+                                  }
+                                : prev
+                            )
                           }
                         >
                           {compareDraftB.headers.map((h: string) => (
@@ -1392,7 +1553,7 @@ export default function Page() {
                       </div>
 
                       <button
-                        className="w-full rounded-xl bg-black p-3 text-white"
+                        className="w-full rounded-xl bg-slate-900 p-3 text-white hover:bg-slate-800"
                         onClick={() => finalizeCompareFile("B")}
                       >
                         اعتماد الملف
@@ -1405,7 +1566,7 @@ export default function Page() {
 
             <div className="flex flex-wrap justify-center gap-3">
               <button
-                className="rounded-xl bg-black px-8 py-3 text-white disabled:opacity-50"
+                className="rounded-xl bg-slate-900 px-8 py-3 text-white disabled:opacity-50"
                 onClick={runComparison}
                 disabled={!compareA || !compareB}
               >
@@ -1413,7 +1574,7 @@ export default function Page() {
               </button>
 
               <button
-                className="rounded-xl border px-8 py-3 disabled:opacity-50"
+                className="rounded-xl border border-slate-300 px-8 py-3 disabled:opacity-50"
                 onClick={exportComparison}
                 disabled={!compareResult}
               >
@@ -1434,7 +1595,7 @@ export default function Page() {
 
                 <Card>
                   <div className="p-6">
-                    <h3 className="text-2xl font-bold">نتائج المقارنة</h3>
+                    <h3 className="text-2xl font-bold text-slate-900">نتائج المقارنة</h3>
                     <p className="mt-2 text-sm text-slate-500">
                       تختار لكل ملف عمود الاسم وعمود السعر وعمود الخصم، ثم تتم
                       المقارنة الذكية بنسبة تشابه 80% حتى مع اختلاف الكتابة.
@@ -1443,7 +1604,7 @@ export default function Page() {
                     <div className="mt-4 overflow-x-auto">
                       <table className="min-w-full border-collapse">
                         <thead>
-                          <tr className="border-b text-right text-sm text-slate-500">
+                          <tr className="border-b border-slate-200 text-right text-sm text-slate-500">
                             <th className="p-3">صنف ملف 1</th>
                             <th className="p-3">صنف ملف 2</th>
                             <th className="p-3">التشابه</th>
@@ -1456,7 +1617,7 @@ export default function Page() {
                         </thead>
                         <tbody>
                           {compareResult.shared.map((row: any) => (
-                            <tr key={row.key} className="border-b">
+                            <tr key={row.key} className="border-b border-slate-100">
                               <td className="p-3 font-medium">{row.a.productName}</td>
                               <td className="p-3 font-medium">{row.b.productName}</td>
                               <td className="p-3">{row.similarity}%</td>
@@ -1481,34 +1642,63 @@ export default function Page() {
 
         {activeTab === "dashboard" && currentUser.role === "supplier" && (
           <div className="space-y-6">
+            <SectionTitle title="لوحة المورد" desc="بيانات شركتك الفعالة خلال آخر 7 أيام." />
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
               <StatBox title="عدد الأصناف" value={myOffers.length} />
               <StatBox title="أفضل خصم" value={topOffer ? `${topOffer.discount}%` : "0%"} />
               <StatBox title="الخطة الحالية" value={myCompany?.plan || "Free"} />
-              <StatBox title="اسم الشركة" value={myCompany?.companyName || currentUser.companyName} />
+              <StatBox title="الكود" value={myCompany?.code || "—"} />
             </div>
           </div>
         )}
 
         {activeTab === "admin" && currentUser.role === "admin" && (
           <div className="space-y-6">
+            <SectionTitle title="لوحة الأدمن" desc="الأدمن هو المسؤول عن تكويد العملاء ومتابعة الملفات الفعالة." />
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
               <StatBox title="المستخدمون" value={users.length} />
-              <StatBox title="الشركات" value={companies.length} />
-              <StatBox title="العروض" value={allOffers.length} />
+              <StatBox title="الشركات الفعالة" value={validCompanies.length} />
+              <StatBox title="العروض الفعالة" value={allOffers.length} />
               <StatBox title="المجموعات الذكية" value={productCount} />
-              <StatBox
-                title="تنبيهات"
-                value={uploadReport?.invalid?.length || 0}
-                hint="صفوف غير صالحة في آخر رفع"
-              />
+              <StatBox title="تنبيهات" value={uploadReport?.invalid?.length || 0} hint="صفوف غير صالحة في آخر رفع" />
             </div>
 
             <Card>
               <div className="p-6">
-                <h3 className="text-2xl font-bold">إدارة الشركات</h3>
+                <h3 className="text-2xl font-bold text-slate-900">أفضل الشركات حسب متوسط الخصم</h3>
                 <p className="mt-2 text-sm text-slate-500">
-                  حذف أو متابعة كل شركة مضافة داخل المنصة.
+                  يعرض فقط العروض الفعالة خلال آخر 7 أيام.
+                </p>
+
+                <div className="mt-4 space-y-3">
+                  {marketLeaderboard.map((company, index) => (
+                    <div
+                      key={company.id}
+                      className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 p-4"
+                    >
+                      <div>
+                        <p className="font-semibold text-slate-900">
+                          #{index + 1} {company.companyName}
+                        </p>
+                        <p className="text-sm text-slate-500">
+                          الكود: {company.code || "—"} • {company.items} صنف • متوسط خصم{" "}
+                          {company.avgDiscount}%
+                        </p>
+                      </div>
+                      <div className="rounded-full bg-slate-100 px-4 py-1 text-sm">
+                        {company.plan}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </Card>
+
+            <Card>
+              <div className="p-6">
+                <h3 className="text-2xl font-bold text-slate-900">إدارة الشركات</h3>
+                <p className="mt-2 text-sm text-slate-500">
+                  رفع ملف جديد لنفس العميل أو نفس الكود يستبدل القديم تلقائيًا.
                 </p>
 
                 <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -1516,13 +1706,14 @@ export default function Page() {
                     <Card key={company.id}>
                       <div className="flex items-center justify-between gap-3 p-4">
                         <div>
-                          <p className="font-semibold">{company.companyName}</p>
+                          <p className="font-semibold text-slate-900">{company.companyName}</p>
                           <p className="text-sm text-slate-500">
-                            {company.offers.length} صنف • {company.plan}
+                            الكود: {company.code || "—"} • {company.offers.length} صنف •{" "}
+                            {company.plan}
                           </p>
                         </div>
                         <button
-                          className="rounded-lg border px-3 py-2"
+                          className="rounded-lg border border-slate-300 px-3 py-2 hover:bg-slate-50"
                           onClick={() => removeCompany(company.id)}
                         >
                           حذف
